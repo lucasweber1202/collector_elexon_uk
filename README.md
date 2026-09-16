@@ -45,21 +45,36 @@ every half-hour is its own series. A clock-change day has 46 or 50 periods, not
 
 Aggregation to daily, monthly or month-to-date belongs to the research layer.
 
-### N2EXMIDP is not collected
+### Both providers are collected; the zero pair is a placeholder
 
-The API returns two providers. Verified on 2026-09-16 across eleven sampled days
-spanning 2016-09 to 2026-09 plus an exhaustive scan of January 2024,
-**`N2EXMIDP` publishes `price = 0.00` and `volume = 0.000` in every settlement
-period without exception.**
+The API returns two providers. A row whose price **and** volume are both exactly
+zero is not stored: it is the API's way of saying the provider did not report
+that settlement period, not an economic observation.
 
-A market index price of zero with zero traded volume, sustained for ten years,
-is a non-reporting placeholder, not an economic price. Storing it would put
-~175,000 synthetic zeros into the research layer, where averaging across
-providers would halve every price.
+That rule was established against the **full** published history — 523 windows,
+345,379 rows, 2016-09 to 2026-09:
 
-It is excluded — but not silently. `validate` re-checks on every run that the
-excluded provider is still entirely zero and **fails** if it ever starts
-reporting, so the exclusion cannot outlive its evidence.
+| Provider | Rows | Both zero | Genuinely reporting |
+| --- | --- | --- | --- |
+| `APXMIDP` | 172,713 | 221 | 172,492 |
+| `N2EXMIDP` | 172,666 | 172,165 | **501** |
+
+`N2EXMIDP` reports rarely — 501 periods on 168 distinct dates across ten years —
+but when it does, the values are real: −65.8 to 450.23 GBP/MWh on volumes of 25
+to 519 MWh. Dropping the provider would discard genuine data; storing its
+172,165 zero rows would corrupt any average across providers. Skipping only the
+zero *pair* keeps both correct.
+
+The rule is deliberately the **conjunction**. Six rows in the full history carry
+a zero price with a non-zero volume — three per provider — and those are genuine
+zero-price trades, so they are stored. No row anywhere carries a non-zero price
+with zero volume.
+
+> An earlier reading of this source, based on eleven sampled days, concluded
+> that `N2EXMIDP` was entirely silent and excluded the provider. The full
+> history disproved it. The exclusion was caught by a guard written to re-prove
+> it on every run, which is why the rule shipped here is the placeholder rule
+> rather than a provider exclusion.
 
 ### Seven-day windows
 
@@ -69,9 +84,21 @@ rejected with HTTP 400. Collection walks the history in seven-day windows, and
 the same window requested twice returns identical bytes and the same SHA-256 —
 which is what makes an unchanged rerun a no-op in `source_snapshots`.
 
-A full backfill from 2016-09-12 is roughly 520 requests. Set
-`COLLECTOR_ELEXON_START=YYYY-MM-DD` to bound a development run; the default is
-the full published history.
+A full backfill from 2016-09-12 is 523 requests and takes roughly 15 minutes.
+Set `COLLECTOR_ELEXON_START=YYYY-MM-DD` to bound a development run; the default
+is the full published history.
+
+**The trailing window is live.** The last window covers today, and today is
+still being published, so a rerun minutes later legitimately sees different
+bytes and records a *new snapshot* for that window alone. That is the snapshot
+contract working — changed content, new row — not churn. Verified over two full
+back-to-back runs: 522 of 523 windows re-hashed identically and wrote nothing;
+only the trailing window changed (35,801 → 35,944 bytes). The data tables were
+untouched: 0 new `time_series`, `availability` or `metadata` rows.
+
+Collecting today is deliberate. It is what lets a period first seen between two
+runs be recorded as `first_seen`, which is the only genuine point-in-time
+evidence this source can produce.
 
 ## Limitations
 

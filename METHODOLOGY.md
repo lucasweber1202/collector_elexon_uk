@@ -64,12 +64,22 @@ contiguity and on the clock, so the collector deduplicates defensively: an
 identical repeat of a `(series_id, reference_date)` is dropped and a genuine
 disagreement between windows stops collection.
 
-### Excluding a non-reporting provider
+### Distinguishing a placeholder from an observation
 
-`N2EXMIDP` publishes nothing but zeros across the entire history. Treating a
-zero price with zero volume as an economic observation would corrupt any
-cross-provider average, and treating it as missing without evidence would be a
-guess. The evidence was gathered first (eleven sampled days across ten years
-plus an exhaustive month), the provider is excluded, and the exclusion is
-re-proved on every run: if a single non-zero value ever appears, collection
-fails so the decision can be revisited.
+Both providers are collected. A row whose price and volume are *both* exactly
+zero is skipped as a non-reporting placeholder.
+
+Getting to that rule took two passes, and the second one matters. The first
+reading sampled eleven days spanning ten years, found `N2EXMIDP` zero in every
+one, and excluded the provider — with a guard that re-proved the exclusion on
+every run. The first full-history run tripped that guard: `N2EXMIDP` reports in
+501 of 172,666 periods, on 168 distinct dates, with entirely real values. The
+provider exclusion was wrong and the guard is the only reason it did not ship.
+
+The replacement rule is the conjunction, not the provider, and the conjunction
+is load-bearing: six rows in the history carry a zero price with a real volume,
+which are genuine zero-price trades and are stored.
+
+The general lesson is recorded here because it will recur: a sample that agrees
+with a hypothesis is not evidence for it when the population is cheap to check.
+The full history was 523 requests away the whole time.

@@ -22,21 +22,33 @@ periods rather than 48, which is why the identifier space runs to SP50.
 Aggregation to daily, monthly or month-to-date belongs to
 `uk_inflation_predictors`, not here.
 
-N2EXMIDP is not collected
--------------------------
-The API returns two providers, ``APXMIDP`` and ``N2EXMIDP``. Verified across
-the full history on 2026-09-16 — eleven sampled days spanning 2016-09 to
-2026-09, plus an exhaustive scan of January 2024 — ``N2EXMIDP`` publishes
-``price = 0.00`` and ``volume = 0.000`` in *every* settlement period without
-exception.
+Both providers are collected; the zero pair is a placeholder
+-----------------------------------------------------------
+The API returns two providers, ``APXMIDP`` and ``N2EXMIDP``. Both are
+collected, but a row whose price *and* volume are both exactly zero is not
+stored, because it is the API's way of saying the provider did not report that
+settlement period rather than an economic observation.
 
-A market index price of zero with zero traded volume, sustained for ten years,
-is a non-reporting placeholder rather than an economic price. Storing it would
-put 175,000 synthetic zeros into the research layer, where averaging across
-providers would halve every price. It is therefore excluded — but not silently:
-`validate` re-checks on every run that the excluded provider is still entirely
-zero, and fails if it ever starts reporting, so the exclusion cannot outlive
-its evidence.
+That rule was established against the full published history (523 windows,
+345,379 rows, 2016-09 to 2026-09):
+
+===============  ==========  =======================  =====================
+Provider         Rows        Both price and volume 0  Genuinely reporting
+===============  ==========  =======================  =====================
+``APXMIDP``      172,713     221                      172,492
+``N2EXMIDP``     172,666     172,165                  501
+===============  ==========  =======================  =====================
+
+``N2EXMIDP`` reports rarely — 501 periods on 168 distinct dates across ten
+years — but when it does the values are real, spanning -65.8 to 450.23 GBP/MWh
+on volumes of 25 to 519 MWh. Dropping the provider would therefore discard
+genuine data, and storing its 172,165 zero rows would corrupt any average
+across providers. Skipping only the zero *pair* keeps both correct.
+
+The rule is deliberately the conjunction. Six rows in the full history carry a
+zero price with a non-zero volume — three for each provider — and those are
+genuine zero-price trades, not placeholders, so they are stored. No row anywhere
+in the history carries a non-zero price with zero volume.
 """
 
 from __future__ import annotations
@@ -77,11 +89,12 @@ HISTORY_START = date(2016, 9, 12)
 # default is the full published history.
 START_OVERRIDE_ENV = "COLLECTOR_ELEXON_START"
 
-# The provider whose data is real, and the one that is not. See the module
-# docstring: the exclusion is re-proved on every run by `validate`.
-COLLECTED_PROVIDER = "APXMIDP"
-EXCLUDED_PROVIDER = "N2EXMIDP"
-KNOWN_PROVIDERS = frozenset({COLLECTED_PROVIDER, EXCLUDED_PROVIDER})
+# Both providers publish real data; see the module docstring. A provider not
+# listed here has never been assessed, so it stops collection rather than being
+# collected blind or dropped silently.
+PRIMARY_PROVIDER = "APXMIDP"
+SPARSE_PROVIDER = "N2EXMIDP"
+KNOWN_PROVIDERS = frozenset({PRIMARY_PROVIDER, SPARSE_PROVIDER})
 
 # measure token -> (payload field, fleet unit, published unit)
 MEASURES: dict[str, tuple[str, str, str]] = {
@@ -166,14 +179,23 @@ def resolve_start() -> date:
     return override
 
 
+def is_placeholder(price: object, volume: object) -> bool:
+    """Is this row the API's "did not report" placeholder?
+
+    Only the conjunction counts. A zero price with a real volume is a genuine
+    zero-price trade and must be stored; the full history contains six of them.
+    """
+    return (price or 0) == 0 and (volume or 0) == 0
+
+
 def parse_window(
     body: bytes, url: str, snapshot_id: str
-) -> tuple[list[Observation], dict[str, dict[str, str]], list[dict[str, Any]]]:
+) -> tuple[list[Observation], dict[str, dict[str, str]], int]:
     """Parse one window payload.
 
-    Returns the observations for the collected provider, their native labels,
-    and the raw rows of the excluded provider so `validate` can re-prove that
-    excluding it is still correct.
+    Returns the observations, their native labels, and how many rows were the
+    non-reporting placeholder, so `validate` can refuse a window that is
+    entirely placeholder.
     """
     try:
         payload = json.loads(body)
@@ -187,7 +209,7 @@ def parse_window(
 
     observations: list[Observation] = []
     natives: dict[str, dict[str, str]] = {}
-    excluded: list[dict[str, Any]] = []
+    placeholders = 0
     for row in payload["data"]:
         missing = [field for field in REQUIRED_FIELDS if field not in row]
         if missing:
@@ -202,8 +224,9 @@ def parse_window(
                 f"are {sorted(KNOWN_PROVIDERS)}. A new provider must be assessed before it is "
                 "collected or ignored."
             )
-        if provider == EXCLUDED_PROVIDER:
-            excluded.append(row)
+        if is_placeholder(row["price"], row["volume"]):
+            # The provider did not report this settlement period.
+            placeholders += 1
             continue
 
         settlement_period = int(row["settlementPeriod"])
@@ -234,7 +257,7 @@ def parse_window(
                     snapshot_id=snapshot_id,
                 )
             )
-    return observations, natives, excluded
+    return observations, natives, placeholders
 
 
 def _build_catalog(
@@ -274,9 +297,15 @@ def _build_catalog(
 def validate(
     observations: list[Observation],
     natives: dict[str, dict[str, str]],
-    excluded: list[dict[str, Any]],
+    placeholders: int,
 ) -> None:
     """Gate the parsed panel before anything reaches the database."""
+    # The specific diagnosis first: the API answered, but nothing was reported.
+    if placeholders and not observations:
+        raise ValueError(
+            f"Elexon MID returned {placeholders} rows and every one was the non-reporting "
+            "placeholder; no provider published anything for the collected range"
+        )
     if not observations:
         raise ValueError("Elexon MID collection produced no observations")
     if len(natives) < MIN_EXPECTED_SERIES:
@@ -300,20 +329,6 @@ def validate(
         raise ValueError(
             f"Elexon MID produced duplicate observations, for example {duplicates}; overlapping "
             "windows would do this"
-        )
-
-    # The exclusion of the silent provider must not outlive its evidence.
-    reporting = [
-        row
-        for row in excluded
-        if (row.get("price") or 0) != 0 or (row.get("volume") or 0) != 0
-    ]
-    if reporting:
-        raise ValueError(
-            f"{EXCLUDED_PROVIDER} is no longer silent: {len(reporting)} row(s) carry a non-zero "
-            f"price or volume, for example {reporting[:3]}. It was excluded because it published "
-            "nothing but zeros across the whole history; that is no longer true and it must be "
-            "re-assessed and collected rather than dropped."
         )
 
     dates = sorted({observation.reference_date for observation in observations})
@@ -360,7 +375,7 @@ def collect(client: httpx.Client) -> SourceData:
 
     observations: list[Observation] = []
     natives: dict[str, dict[str, str]] = {}
-    excluded: list[dict[str, Any]] = []
+    placeholders = 0
     snapshots: list[Any] = []
     fetched_at = datetime.now(UTC)
     # Settlement dates follow local (BST/GMT) midnight while the API window is
@@ -373,11 +388,12 @@ def collect(client: httpx.Client) -> SourceData:
 
     for index, (first, last) in enumerate(all_windows, start=1):
         url, body, digest = fetch_window(client, API_BASE, first, last)
-        window_observations, window_natives, window_excluded = parse_window(body, url, digest)
-        if not window_observations:
-            # A window before the provider started reporting, or a genuine
-            # publication gap. Neither is an error; an empty whole history is,
-            # and `validate` catches that.
+        window_observations, window_natives, window_placeholders = parse_window(
+            body, url, digest
+        )
+        if not window_observations and not window_placeholders:
+            # A window before MID began, or a genuine publication gap. Neither
+            # is an error; an empty whole history is, and `validate` catches it.
             logger.debug("Elexon MID window %s to %s returned no rows", first, last)
             continue
         snapshots.append(
@@ -408,11 +424,11 @@ def collect(client: httpx.Client) -> SourceData:
             observations.append(observation)
         for series_id, fields in window_natives.items():
             natives.setdefault(series_id, fields)
-        excluded.extend(window_excluded)
+        placeholders += window_placeholders
         if index % 25 == 0:
             logger.info("Elexon MID: %d/%d windows fetched", index, len(all_windows))
 
-    validate(observations, natives, excluded)
+    validate(observations, natives, placeholders)
     last_reference = max(observation.reference_date for observation in observations)
     return SourceData(
         source_id=SOURCE_ID,

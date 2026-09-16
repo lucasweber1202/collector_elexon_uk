@@ -10,12 +10,13 @@ import pytest
 
 from scripts.elexon import MAX_WINDOW_DAYS, windows
 from scripts.extract_elexon_mid import (
-    COLLECTED_PROVIDER,
-    EXCLUDED_PROVIDER,
     HISTORY_START,
     MAX_SETTLEMENT_PERIOD,
     MEASURES,
+    PRIMARY_PROVIDER,
+    SPARSE_PROVIDER,
     _build_catalog,
+    is_placeholder,
     make_series_id,
     parse_series_id,
     parse_window,
@@ -49,9 +50,9 @@ def _panel(
     natives: dict[str, dict[str, str]] = {}
     for measure in MEASURES:
         for period in range(1, periods + 1):
-            series_id = make_series_id(COLLECTED_PROVIDER, measure, period)
+            series_id = make_series_id(PRIMARY_PROVIDER, measure, period)
             natives[series_id] = {
-                "provider": COLLECTED_PROVIDER,
+                "provider": PRIMARY_PROVIDER,
                 "measure": measure,
                 "settlement_period": str(period),
             }
@@ -71,35 +72,71 @@ def _panel(
 
 
 def test_parses_price_and_volume_per_settlement_period() -> None:
-    body = _payload([_row(COLLECTED_PROVIDER, "2026-09-01", 1, 61.5, 400.0)])
-    observations, natives, excluded = parse_window(body, "t://e", "snap")
+    body = _payload([_row(PRIMARY_PROVIDER, "2026-09-01", 1, 61.5, 400.0)])
+    observations, natives, placeholders = parse_window(body, "t://e", "snap")
     assert len(natives) == 2
     values = {o.series_id: o.value for o in observations}
-    assert values[make_series_id(COLLECTED_PROVIDER, "PRICE", 1)] == pytest.approx(61.5)
-    assert values[make_series_id(COLLECTED_PROVIDER, "VOLUME", 1)] == pytest.approx(400.0)
+    assert values[make_series_id(PRIMARY_PROVIDER, "PRICE", 1)] == pytest.approx(61.5)
+    assert values[make_series_id(PRIMARY_PROVIDER, "VOLUME", 1)] == pytest.approx(400.0)
     assert all(o.reference_date == date(2026, 9, 1) for o in observations)
-    assert excluded == []
+    assert placeholders == 0
 
 
 def test_the_settlement_date_is_the_reference_date() -> None:
     """The schema keys by DATE; the period lives in the identifier."""
-    body = _payload([_row(COLLECTED_PROVIDER, "2026-09-01", 30, 10.0, 1.0)])
+    body = _payload([_row(PRIMARY_PROVIDER, "2026-09-01", 30, 10.0, 1.0)])
     observations, _natives, _excluded = parse_window(body, "t://e", "snap")
     assert {o.reference_date for o in observations} == {date(2026, 9, 1)}
     assert all("_SP30" in o.series_id for o in observations)
 
 
-def test_the_silent_provider_is_separated_not_stored() -> None:
+def test_both_providers_are_collected() -> None:
+    """N2EXMIDP reports rarely but genuinely; dropping it would lose real data."""
     body = _payload(
         [
-            _row(COLLECTED_PROVIDER, "2026-09-01", 1, 61.5, 400.0),
-            _row(EXCLUDED_PROVIDER, "2026-09-01", 1, 0.0, 0.0),
+            _row(PRIMARY_PROVIDER, "2026-09-01", 1, 61.5, 400.0),
+            _row(SPARSE_PROVIDER, "2026-09-01", 1, 44.0, 50.0),
         ]
     )
-    observations, natives, excluded = parse_window(body, "t://e", "snap")
-    assert all(COLLECTED_PROVIDER in o.series_id for o in observations)
-    assert all(EXCLUDED_PROVIDER not in sid for sid in natives)
-    assert len(excluded) == 1
+    observations, natives, placeholders = parse_window(body, "t://e", "snap")
+    providers = {n["provider"] for n in natives.values()}
+    assert providers == {PRIMARY_PROVIDER, SPARSE_PROVIDER}
+    assert placeholders == 0
+    assert len(observations) == 4
+
+
+def test_the_zero_pair_is_a_placeholder_not_an_observation() -> None:
+    """price == 0 and volume == 0 means the provider did not report."""
+    body = _payload(
+        [
+            _row(PRIMARY_PROVIDER, "2026-09-01", 1, 61.5, 400.0),
+            _row(SPARSE_PROVIDER, "2026-09-01", 1, 0.0, 0.0),
+        ]
+    )
+    observations, natives, placeholders = parse_window(body, "t://e", "snap")
+    assert placeholders == 1
+    assert all(PRIMARY_PROVIDER in o.series_id for o in observations)
+    assert all(SPARSE_PROVIDER not in sid for sid in natives)
+
+
+def test_a_zero_price_with_real_volume_is_a_genuine_trade() -> None:
+    """Six such rows exist in the full history; they are not placeholders."""
+    body = _payload([_row(PRIMARY_PROVIDER, "2026-09-01", 1, 0.0, 120.0)])
+    observations, _natives, placeholders = parse_window(body, "t://e", "snap")
+    assert placeholders == 0
+    values = {o.series_id: o.value for o in observations}
+    assert values[make_series_id(PRIMARY_PROVIDER, "PRICE", 1)] == 0.0
+    assert values[make_series_id(PRIMARY_PROVIDER, "VOLUME", 1)] == pytest.approx(120.0)
+
+
+@pytest.mark.parametrize(
+    ("price", "volume", "expected"),
+    [(0.0, 0.0, True), (0.0, 120.0, False), (61.5, 400.0, False), (None, None, True)],
+)
+def test_the_placeholder_rule_is_the_conjunction(
+    price: float | None, volume: float | None, expected: bool
+) -> None:
+    assert is_placeholder(price, volume) is expected
 
 
 def test_an_unknown_provider_fails_loudly() -> None:
@@ -109,7 +146,7 @@ def test_an_unknown_provider_fails_loudly() -> None:
 
 
 def test_a_missing_field_fails_loudly() -> None:
-    row = _row(COLLECTED_PROVIDER, "2026-09-01", 1, 50.0, 100.0)
+    row = _row(PRIMARY_PROVIDER, "2026-09-01", 1, 50.0, 100.0)
     del row["volume"]
     with pytest.raises(ValueError, match="missing field"):
         parse_window(_payload([row]), "t://e", "snap")
@@ -126,15 +163,15 @@ def test_a_non_json_payload_fails_loudly() -> None:
 
 
 def test_an_out_of_range_settlement_period_fails_loudly() -> None:
-    body = _payload([_row(COLLECTED_PROVIDER, "2026-09-01", 51, 50.0, 100.0)])
+    body = _payload([_row(PRIMARY_PROVIDER, "2026-09-01", 51, 50.0, 100.0)])
     with pytest.raises(ValueError, match="outside"):
         parse_window(body, "t://e", "snap")
 
 
 def test_a_null_value_is_skipped_not_zeroed() -> None:
-    body = _payload([_row(COLLECTED_PROVIDER, "2026-09-01", 1, None, 400.0)])
+    body = _payload([_row(PRIMARY_PROVIDER, "2026-09-01", 1, None, 400.0)])
     observations, natives, _excluded = parse_window(body, "t://e", "snap")
-    assert set(natives) == {make_series_id(COLLECTED_PROVIDER, "VOLUME", 1)}
+    assert set(natives) == {make_series_id(PRIMARY_PROVIDER, "VOLUME", 1)}
     assert len(observations) == 1
 
 
@@ -144,15 +181,15 @@ def test_a_null_value_is_skipped_not_zeroed() -> None:
 @pytest.mark.parametrize("period", [46, 48, 49, 50])
 def test_clock_change_days_are_representable(period: int) -> None:
     """A short day has 46 periods and a long one 50."""
-    body = _payload([_row(COLLECTED_PROVIDER, "2026-10-25", period, 40.0, 300.0)])
+    body = _payload([_row(PRIMARY_PROVIDER, "2026-10-25", period, 40.0, 300.0)])
     observations, _natives, _excluded = parse_window(body, "t://e", "snap")
     assert any(f"_SP{period:02d}" in o.series_id for o in observations)
 
 
 def test_the_identifier_space_covers_fifty_periods() -> None:
-    assert make_series_id(COLLECTED_PROVIDER, "PRICE", MAX_SETTLEMENT_PERIOD).endswith("_SP50")
+    assert make_series_id(PRIMARY_PROVIDER, "PRICE", MAX_SETTLEMENT_PERIOD).endswith("_SP50")
     with pytest.raises(ValueError, match="outside"):
-        make_series_id(COLLECTED_PROVIDER, "PRICE", 51)
+        make_series_id(PRIMARY_PROVIDER, "PRICE", 51)
 
 
 # --- identifiers ---------------------------------------------------------
@@ -161,15 +198,15 @@ def test_the_identifier_space_covers_fifty_periods() -> None:
 def test_series_ids_round_trip() -> None:
     for measure in MEASURES:
         for period in (1, 9, 10, 46, 48, 50):
-            series_id = make_series_id(COLLECTED_PROVIDER, measure, period)
+            series_id = make_series_id(PRIMARY_PROVIDER, measure, period)
             _s, _d, provider, parsed_measure, parsed_period = parse_series_id(series_id)
             assert make_series_id(provider, parsed_measure, parsed_period) == series_id
             assert parsed_period == period
 
 
 def test_the_period_is_zero_padded_so_ids_sort() -> None:
-    assert make_series_id(COLLECTED_PROVIDER, "PRICE", 1).endswith("_SP01")
-    ids = [make_series_id(COLLECTED_PROVIDER, "PRICE", p) for p in (1, 2, 10, 48)]
+    assert make_series_id(PRIMARY_PROVIDER, "PRICE", 1).endswith("_SP01")
+    ids = [make_series_id(PRIMARY_PROVIDER, "PRICE", p) for p in (1, 2, 10, 48)]
     assert ids == sorted(ids)
 
 
@@ -218,27 +255,19 @@ def test_a_reversed_range_is_refused() -> None:
 
 def test_validation_accepts_a_well_formed_panel() -> None:
     observations, natives = _panel()
-    validate(observations, natives, [])
+    validate(observations, natives, 0)
 
 
-def test_the_provider_exclusion_is_re_proved_every_run() -> None:
-    """If the silent provider starts reporting, dropping it is no longer right."""
-    observations, natives = _panel()
-    reporting = [_row(EXCLUDED_PROVIDER, "2026-09-01", 1, 55.0, 300.0)]
-    with pytest.raises(ValueError, match="no longer silent"):
-        validate(observations, natives, reporting)
-
-
-def test_a_still_silent_provider_does_not_trip_the_guard() -> None:
-    observations, natives = _panel()
-    silent = [_row(EXCLUDED_PROVIDER, "2026-09-01", p, 0.0, 0.0) for p in range(1, 49)]
-    validate(observations, natives, silent)
+def test_an_all_placeholder_history_is_refused() -> None:
+    """The API answering with nothing but placeholders is a source failure."""
+    with pytest.raises(ValueError, match="every one was the non-reporting placeholder"):
+        validate([], {}, 500)
 
 
 def test_too_few_series_is_refused() -> None:
     observations, natives = _panel(periods=10)
     with pytest.raises(ValueError, match="below the .* floor"):
-        validate(observations, natives, [])
+        validate(observations, natives, 0)
 
 
 def test_losing_a_measure_is_refused() -> None:
@@ -248,14 +277,14 @@ def test_losing_a_measure_is_refused() -> None:
         validate(
             [o for o in observations if o.series_id in kept],
             {s: f for s, f in natives.items() if s in kept},
-            [],
+            0,
         )
 
 
 def test_a_duplicate_observation_is_refused() -> None:
     observations, natives = _panel()
     with pytest.raises(ValueError, match="duplicate observations"):
-        validate([*observations, observations[0]], natives, [])
+        validate([*observations, observations[0]], natives, 0)
 
 
 def test_a_future_settlement_date_is_refused() -> None:
@@ -267,7 +296,7 @@ def test_a_future_settlement_date_is_refused() -> None:
         "snapshot",
     )
     with pytest.raises(ValueError, match="future settlement date"):
-        validate([*observations, future], natives, [])
+        validate([*observations, future], natives, 0)
 
 
 def test_a_date_before_the_established_history_is_refused() -> None:
@@ -276,49 +305,49 @@ def test_a_date_before_the_established_history_is_refused() -> None:
         observations[0].series_id, HISTORY_START - timedelta(days=1), 50.0, "snapshot"
     )
     with pytest.raises(ValueError, match="before the established history start"):
-        validate([*observations, early], natives, [])
+        validate([*observations, early], natives, 0)
 
 
 def test_a_negative_price_is_accepted_as_published() -> None:
     """GB wholesale prices go negative in oversupply; that is real."""
     observations, natives = _panel()
-    sid = make_series_id(COLLECTED_PROVIDER, "PRICE", 1)
+    sid = make_series_id(PRIMARY_PROVIDER, "PRICE", 1)
     negative = Observation(sid, HISTORY_START, -85.0, "snapshot")
     kept = [o for o in observations if (o.series_id, o.reference_date) != (sid, HISTORY_START)]
-    validate([negative, *kept], natives, [])
+    validate([negative, *kept], natives, 0)
 
 
 def test_a_negative_volume_is_refused() -> None:
     observations, natives = _panel()
-    sid = make_series_id(COLLECTED_PROVIDER, "VOLUME", 1)
+    sid = make_series_id(PRIMARY_PROVIDER, "VOLUME", 1)
     broken = Observation(sid, HISTORY_START, -1.0, "snapshot")
     kept = [o for o in observations if (o.series_id, o.reference_date) != (sid, HISTORY_START)]
     with pytest.raises(ValueError, match="plausible"):
-        validate([broken, *kept], natives, [])
+        validate([broken, *kept], natives, 0)
 
 
 @pytest.mark.parametrize("price", [-5000.0, 50000.0])
 def test_an_implausible_price_is_refused(price: float) -> None:
     observations, natives = _panel()
-    sid = make_series_id(COLLECTED_PROVIDER, "PRICE", 1)
+    sid = make_series_id(PRIMARY_PROVIDER, "PRICE", 1)
     broken = Observation(sid, HISTORY_START, price, "snapshot")
     kept = [o for o in observations if (o.series_id, o.reference_date) != (sid, HISTORY_START)]
     with pytest.raises(ValueError, match="plausible"):
-        validate([broken, *kept], natives, [])
+        validate([broken, *kept], natives, 0)
 
 
 def test_an_empty_panel_is_refused() -> None:
     with pytest.raises(ValueError, match="no observations"):
-        validate([], {}, [])
+        validate([], {}, 0)
 
 
 def test_the_catalog_satisfies_the_metadata_vocabularies() -> None:
-    body = _payload([_row(COLLECTED_PROVIDER, "2026-09-01", 1, 61.5, 400.0)])
+    body = _payload([_row(PRIMARY_PROVIDER, "2026-09-01", 1, 61.5, 400.0)])
     _observations, natives, _excluded = parse_window(body, "t://e", "snap")
     catalog = _build_catalog(natives, date(2026, 9, 1))
     validate_catalog(catalog)
-    price = catalog[make_series_id(COLLECTED_PROVIDER, "PRICE", 1)]
-    volume = catalog[make_series_id(COLLECTED_PROVIDER, "VOLUME", 1)]
+    price = catalog[make_series_id(PRIMARY_PROVIDER, "PRICE", 1)]
+    volume = catalog[make_series_id(PRIMARY_PROVIDER, "VOLUME", 1)]
     assert price["unit"] == "currency"
     assert volume["unit"] == "other"
     # The Elexon licence requires attribution to travel with the data.
