@@ -23,7 +23,12 @@ series description so it travels with the data into the research layer.
 
 | `source_id` | Dataset | Frequency | History | Series |
 | --- | --- | --- | --- | --- |
-| `elexon_market_index_prices` | [Market Index Data (MID)](https://bmrs.elexon.co.uk/api-documentation) | half-hourly settlement periods | 2016-09-12 → | 96 |
+| `elexon_market_index_prices` | [Market Index Data (MID)](https://bmrs.elexon.co.uk/api-documentation) | half-hourly settlement periods | 2016-09-12 → | 196 |
+
+The verified full-history build contains **196 series and 345,986 stored
+observations across 523 source snapshots**: 100 APXMIDP series and 96 N2EXMIDP
+series. The provider totals differ because APXMIDP reports the clock-change
+settlement periods SP49/SP50 while the sparse N2EXMIDP history does not.
 
 Endpoint: `https://data.elexon.co.uk/bmrs/api/v1/balancing/pricing/market-index`
 (no authentication required).
@@ -37,6 +42,8 @@ period is encoded in the series identifier:
 ```
 ELEXON_MID_APXMIDP_PRICE_SP01 … ELEXON_MID_APXMIDP_PRICE_SP50
 ELEXON_MID_APXMIDP_VOLUME_SP01 … ELEXON_MID_APXMIDP_VOLUME_SP50
+ELEXON_MID_N2EXMIDP_PRICE_SP01 … ELEXON_MID_N2EXMIDP_PRICE_SP48
+ELEXON_MID_N2EXMIDP_VOLUME_SP01 … ELEXON_MID_N2EXMIDP_VOLUME_SP48
 ```
 
 The primary key `(series_id, reference_date, vintage_date)` is untouched and
