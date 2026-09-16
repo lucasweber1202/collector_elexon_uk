@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "collector-elexon-uk"
 version = "0.1.0"
 description = "Canonical standalone UK inflation predictor collector skeleton"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.13"
 dependencies = [
   "azure-identity>=1.17",
   "azure-keyvault-secrets>=4.8",
@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["mypy>=1.11", "pytest>=8.0", "ruff>=0.6"]
+dev = ["mypy>=1.11", "numpy<2.3", "pytest>=8.0", "ruff>=0.6"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
