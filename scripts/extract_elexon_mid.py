@@ -167,8 +167,7 @@ def resolve_start() -> date:
     override = date.fromisoformat(raw)
     if override < HISTORY_START:
         raise ValueError(
-            f"{START_OVERRIDE_ENV}={override} precedes the published history start "
-            f"{HISTORY_START}"
+            f"{START_OVERRIDE_ENV}={override} precedes the published history start {HISTORY_START}"
         )
     logger.warning(
         "%s is set: collecting from %s rather than the full history from %s",
@@ -388,9 +387,7 @@ def collect(client: httpx.Client) -> SourceData:
 
     for index, (first, last) in enumerate(all_windows, start=1):
         url, body, digest = fetch_window(client, API_BASE, first, last)
-        window_observations, window_natives, window_placeholders = parse_window(
-            body, url, digest
-        )
+        window_observations, window_natives, window_placeholders = parse_window(body, url, digest)
         if not window_observations and not window_placeholders:
             # A window before MID began, or a genuine publication gap. Neither
             # is an error; an empty whole history is, and `validate` catches it.

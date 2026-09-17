@@ -141,7 +141,9 @@ def http_get(client: httpx.Client, url: str) -> bytes:
     raise last_error
 
 
-def windows(start: date, end: date, size_days: int = MAX_WINDOW_DAYS) -> Iterator[tuple[date, date]]:
+def windows(
+    start: date, end: date, size_days: int = MAX_WINDOW_DAYS
+) -> Iterator[tuple[date, date]]:
     """Split ``[start, end]`` into inclusive windows the API will accept."""
     if size_days < 1 or size_days > MAX_WINDOW_DAYS:
         raise ValueError(
@@ -161,7 +163,9 @@ def window_url(base: str, first: date, last: date) -> str:
     return f"{base}?from={first.isoformat()}T00:00Z&to={last.isoformat()}T23:59Z&format=json"
 
 
-def fetch_window(client: httpx.Client, base: str, first: date, last: date) -> tuple[str, bytes, str]:
+def fetch_window(
+    client: httpx.Client, base: str, first: date, last: date
+) -> tuple[str, bytes, str]:
     """Fetch one window, returning ``(url, body, sha256)``.
 
     The body is the raw bytes the API returned, which is what gets hashed and
