@@ -99,7 +99,7 @@ KNOWN_PROVIDERS = frozenset({PRIMARY_PROVIDER, SPARSE_PROVIDER})
 # measure token -> (payload field, fleet unit, published unit)
 MEASURES: dict[str, tuple[str, str, str]] = {
     "PRICE": ("price", "currency", "GBP per MWh"),
-    "VOLUME": ("volume", "other", "MWh"),
+    "VOLUME": ("volume", "megawatt_hours", "MWh"),
 }
 
 # A settlement day has 48 periods, 46 on the spring clock change and 50 on the
@@ -288,7 +288,7 @@ def _build_catalog(
             "unit": fleet_unit,
             "eco_group": "financial_markets",
             "source_url": DOC_URL,
-            "last_publish_date": last_publish_date,
+            "last_publish_date": None,  # MID exposes settlement time, not publication time.
         }
     return catalog
 
@@ -426,11 +426,10 @@ def collect(client: httpx.Client) -> SourceData:
             logger.info("Elexon MID: %d/%d windows fetched", index, len(all_windows))
 
     validate(observations, natives, placeholders)
-    last_reference = max(observation.reference_date for observation in observations)
     return SourceData(
         source_id=SOURCE_ID,
         source_url=DOC_URL,
-        catalog=_build_catalog(natives, last_reference),
+        catalog=_build_catalog(natives, None),
         observations=observations,
         # The BMRS API exposes no publication timestamp, so there is nothing to
         # attribute to. See POINT_IN_TIME.md.
@@ -439,5 +438,5 @@ def collect(client: httpx.Client) -> SourceData:
         min_lag_days=MIN_LAG_DAYS,
         max_lag_days=MAX_LAG_DAYS,
         inferred_lag_days=INFERRED_LAG_DAYS,
-        last_publish_date=last_reference,
+        last_publish_date=None,
     )
