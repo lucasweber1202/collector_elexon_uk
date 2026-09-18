@@ -19,7 +19,7 @@ BATCH_SIZE = 500
 # `daily` is the closest fleet spelling for a half-hourly settlement series
 # whose reference_date is the settlement date; the period is in the series_id.
 FREQUENCIES = frozenset({"daily"})
-UNITS = frozenset({"currency", "other"})
+UNITS = frozenset({"currency", "other", "megawatt_hours"})
 ECO_GROUPS = frozenset({"financial_markets"})
 
 _COMPARABLE_COLUMNS = (
