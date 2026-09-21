@@ -43,9 +43,7 @@ def _payload(rows: list[dict[str, object]]) -> bytes:
     return json.dumps({"metadata": {"datasets": ["MID"]}, "data": rows}).encode()
 
 
-def _panel(
-    days: int = 3, periods: int = 48
-) -> tuple[list[Observation], dict[str, dict[str, str]]]:
+def _panel(days: int = 3, periods: int = 48) -> tuple[list[Observation], dict[str, dict[str, str]]]:
     observations: list[Observation] = []
     natives: dict[str, dict[str, str]] = {}
     for measure in MEASURES:
