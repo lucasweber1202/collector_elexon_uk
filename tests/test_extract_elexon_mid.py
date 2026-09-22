@@ -16,9 +16,9 @@ from scripts.extract_elexon_mid import (
     PRIMARY_PROVIDER,
     SPARSE_PROVIDER,
     _build_catalog,
+    describe_series_id,
     is_placeholder,
     make_series_id,
-    parse_series_id,
     parse_window,
     validate,
 )
@@ -197,7 +197,7 @@ def test_series_ids_round_trip() -> None:
     for measure in MEASURES:
         for period in (1, 9, 10, 46, 48, 50):
             series_id = make_series_id(PRIMARY_PROVIDER, measure, period)
-            _s, _d, provider, parsed_measure, parsed_period = parse_series_id(series_id)
+            _s, _d, provider, parsed_measure, parsed_period = describe_series_id(series_id)
             assert make_series_id(provider, parsed_measure, parsed_period) == series_id
             assert parsed_period == period
 
@@ -219,7 +219,7 @@ def test_the_period_is_zero_padded_so_ids_sort() -> None:
 )
 def test_a_malformed_series_id_is_refused(series_id: str) -> None:
     with pytest.raises(ValueError):
-        parse_series_id(series_id)
+        describe_series_id(series_id)
 
 
 # --- windowing -----------------------------------------------------------
