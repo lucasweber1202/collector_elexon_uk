@@ -347,7 +347,7 @@ def test_the_catalog_satisfies_the_metadata_vocabularies() -> None:
     price = catalog[make_series_id(PRIMARY_PROVIDER, "PRICE", 1)]
     volume = catalog[make_series_id(PRIMARY_PROVIDER, "VOLUME", 1)]
     assert price["unit"] == "currency"
-    assert volume["unit"] == "other"
+    assert volume["unit"] == "megawatt_hours"
     # The Elexon licence requires attribution to travel with the data.
     assert "Contains BMRS data" in price["description"]
     assert "settlement period 01" in price["name"]
