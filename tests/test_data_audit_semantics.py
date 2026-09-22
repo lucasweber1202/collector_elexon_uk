@@ -3,7 +3,7 @@ from datetime import date
 from scripts.extract_elexon_mid import _build_catalog
 
 
-def test_settlement_date_is_not_publication_date():
+def test_settlement_date_is_not_publication_date() -> None:
     fields = {
         "ELEXON_MID_APXMIDP_VOLUME_SP01": {
             "measure": "VOLUME",

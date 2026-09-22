@@ -142,7 +142,7 @@ def make_series_id(provider: str, measure: str, settlement_period: int) -> str:
     return series_id
 
 
-def parse_series_id(series_id: str) -> tuple[str, str, str, str, int]:
+def describe_series_id(series_id: str) -> tuple[str, str, str, str, int]:
     """Decode ``ELEXON_MID_{PROVIDER}_{MEASURE}_SP{NN}`` into its five parts."""
     parts = series_id.split("_")
     if len(parts) != 5 or parts[0] != "ELEXON" or parts[1] != "MID":
@@ -157,6 +157,19 @@ def parse_series_id(series_id: str) -> tuple[str, str, str, str, int]:
     if not MIN_SETTLEMENT_PERIOD <= settlement_period <= MAX_SETTLEMENT_PERIOD:
         raise ValueError(f"Elexon MID series_id has an out-of-range period: {series_id}")
     return source, dataset, provider, measure, settlement_period
+
+
+def parse_series_id(series_id: str) -> tuple[str, ...]:
+    """Split a canonical id into its raw underscore components.
+
+    This is the fleet contract (GUIDELINES.md 4): uppercase, underscore
+    separated, ordered coarse -> fine, and exactly reversible, so
+    build_series_id(*parse_series_id(sid)) == sid. The decoded view -- which
+    strips the base-period marker and types the numeric parts -- is
+    describe_series_id, which validates the same grammar.
+    """
+    describe_series_id(series_id)
+    return tuple(series_id.split("_"))
 
 
 def resolve_start() -> date:
