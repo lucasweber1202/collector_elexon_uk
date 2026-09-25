@@ -18,7 +18,12 @@ from typing import Any
 
 import httpx
 
-from scripts.config import MAX_STALE_MONTHS, MIN_HISTORY_YEARS
+from scripts.config import (
+    CLOCK_CHANGE_MAX_STALE_MONTHS,
+    CLOCK_CHANGE_PERIODS,
+    MAX_STALE_MONTHS,
+    MIN_HISTORY_YEARS,
+)
 from scripts.elexon import SourceData, build_client
 from scripts.extract_elexon_mid import collect as _collect_mid
 
@@ -81,11 +86,30 @@ def _is_valid(value: Any) -> bool:
     return math.isfinite(numeric)
 
 
+def settlement_period(series_id: str) -> str | None:
+    """Return the ``SPnn`` token of ``series_id``, if it carries one."""
+    tail = series_id.rsplit("_", 1)[-1]
+    return tail if tail.startswith("SP") and tail[2:].isdigit() else None
+
+
+def staleness_allowance(series_id: str | None, max_stale_months: int) -> int:
+    """Return the staleness budget for ``series_id``.
+
+    Settlement periods 49 and 50 only exist on the long clock-change day, so
+    they publish annually and need an annual allowance. Every other period
+    publishes daily and keeps the strict one.
+    """
+    if series_id is not None and settlement_period(series_id) in CLOCK_CHANGE_PERIODS:
+        return max(max_stale_months, CLOCK_CHANGE_MAX_STALE_MONTHS)
+    return max_stale_months
+
+
 def assess_series(
     reference_dates: list[date],
     today: date,
     max_stale_months: int = MAX_STALE_MONTHS,
     min_history_years: float = MIN_HISTORY_YEARS,
+    series_id: str | None = None,
 ) -> str:
     """Classify one series from the reference dates of its valid observations.
 
@@ -93,11 +117,15 @@ def assess_series(
     Recency is judged at the period end and over non-null values only: a source
     that keeps listing a discontinued series with empty recent cells must not
     look live because of those blanks.
+
+    Recency is also judged against the cadence the settlement period actually
+    publishes at, so the annual clock-change periods are not mistaken for dead
+    daily ones. See scripts/config.py.
     """
     if not reference_dates:
         return "empty"
     first, last = min(reference_dates), max(reference_dates)
-    if _months_between(last, today) > max_stale_months:
+    if _months_between(last, today) > staleness_allowance(series_id, max_stale_months):
         return "stale"
     if _months_between(first, last) < round(min_history_years * 12):
         return "short_history"
@@ -126,7 +154,11 @@ def filter_usable_series(
     verdicts: dict[str, str] = {}
     for series_id in set(catalog) | {o.series_id for o in observations}:
         verdicts[series_id] = assess_series(
-            valid_dates.get(series_id, []), today, max_stale_months, min_history_years
+            valid_dates.get(series_id, []),
+            today,
+            max_stale_months,
+            min_history_years,
+            series_id,
         )
 
     keep = {series_id for series_id, verdict in verdicts.items() if verdict == "keep"}

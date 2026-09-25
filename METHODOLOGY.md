@@ -83,3 +83,39 @@ which are genuine zero-price trades and are stored.
 The general lesson is recorded here because it will recur: a sample that agrees
 with a hypothesis is not evidence for it when the population is cheap to check.
 The full history was 523 requests away the whole time.
+
+## Canonical catalogue versus the active set
+
+The source catalogue is **196 series**: 100 APXMIDP and 96 N2EXMIDP, each a
+price and a volume series per settlement period. That figure describes what the
+source has ever published and does not change with a run.
+
+What is stored after the 5.1 usable-series filter is smaller, and the two
+numbers must not be conflated. Measured against the live source on 2026-09-25:
+
+| Family | Catalogue | Active after filter |
+| --- | ---: | ---: |
+| APXMIDP | 100 | 100 |
+| N2EXMIDP | 96 | 16 |
+| **Total** | **196** | **116** |
+
+APX reports every settlement period every day: 366 report-days in the last
+twelve months. N2EX does not. It reports only when N2EX trades occur in a given
+settlement period, and it did so on 26 days in the same twelve months; several
+of its settlement periods were last reported in 2021 or 2023. Those series are
+dropped on recency, which is the filter working as intended rather than a
+collection defect. The catalogue still records all 96.
+
+### Settlement periods 49 and 50
+
+The long clock-change day — the last Sunday of October, when BST ends — runs to
+50 half-hour settlement periods instead of 48, so SP49 and SP50 exist on
+exactly one day a year. Each holds ten observations, one per clock change from
+2016-10-30 to 2025-10-26, against roughly 3,600 for SP46 to SP48.
+
+Judged by the strict two-month staleness rule they read as discontinued for ten
+months of every twelve, so they were admitted each October and dropped again
+each January. They are judged on a fourteen-month allowance instead — two
+months past the clock change that should have refreshed them — so a genuinely
+retired long-day period still ages out while a live one stops flickering.
+`tests/test_clock_change_periods.py` holds both directions.
