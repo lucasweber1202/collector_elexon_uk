@@ -85,6 +85,20 @@ MAX_DOWNLOAD_BYTES = int(os.getenv("COLLECTOR_MAX_DOWNLOAD_BYTES", str(128 * 102
 MAX_STALE_MONTHS = int(os.getenv("COLLECTOR_MAX_STALE_MONTHS", "2"))
 MIN_HISTORY_YEARS = float(os.getenv("COLLECTOR_MIN_HISTORY_YEARS", "3"))
 
+# Settlement periods 49 and 50 exist only on the long clock-change day, when
+# BST ends and the day runs to 50 half-hour periods instead of 48. They are
+# published once a year, on the last Sunday of October, and have been since
+# 2016. A two-month staleness rule can never keep them: they would be admitted
+# each October and dropped again each January, flickering in and out of the
+# database forever, even though nothing about them is discontinued.
+#
+# They are judged on an annual allowance instead. Everything else about them is
+# unchanged, so a genuinely retired clock-change period still ages out -- at 14
+# months, which is two months past the next clock change that should have
+# refreshed it.
+CLOCK_CHANGE_PERIODS = frozenset({"SP49", "SP50"})
+CLOCK_CHANGE_MAX_STALE_MONTHS = int(os.getenv("COLLECTOR_CLOCK_CHANGE_MAX_STALE_MONTHS", "14"))
+
 
 def missing_environment(prod: bool = PROD) -> list[str]:
     if not prod:
